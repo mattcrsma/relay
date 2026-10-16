@@ -1,0 +1,20 @@
+# Local secrets and exported case data
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*case-history*.json
+*diagnostics*.json
+reports/
+exports/
+upload/
+local-settings*.json
+*.log
+# Development files
+node_modules/
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.zip
