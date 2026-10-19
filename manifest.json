@@ -1,6 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Relay",
+  "short_name": "Relay",
   "version": "3.1.2",
   "description": "Reviews only your SharePoint assignments and their direct related cases. No AI.",
   "permissions": [
@@ -28,13 +29,12 @@
       "32": "images/relay.png"
     }
   },
-  "options_page": "options.html",
-  "minimum_chrome_version": "120",
-  "short_name": "Relay",
   "icons": {
     "16": "images/relay.png",
     "32": "images/relay.png",
     "48": "images/relay.png",
     "128": "images/relay.png"
-  }
+  },
+  "options_page": "options.html",
+  "minimum_chrome_version": "120"
 }

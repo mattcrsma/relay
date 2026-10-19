@@ -1,14 +1,222 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Relay</title><link rel="stylesheet" href="style.css"><script src="popup.js" defer></script></head>
-<body class="popup"><div class="app">
-<header><div class="brand"><div class="logo"><img src="images/relay.png" alt="" width="46" height="46" style="object-fit:contain;border-radius:14px"></div><div><h1>Relay</h1><p>Case monitoring dashboard</p></div></div><div class="headerActions"><button id="settingsButton" title="Settings" aria-label="Settings">⚙</button><button id="themeButton" title="Theme" aria-label="Switch theme">☀️</button></div></header>
-<section class="card status"><span id="statusDot" aria-hidden="true"></span><div><strong id="statusText">Loading…</strong><p id="lastRun">No completed run yet</p></div></section>
-<div class="monitorActions"><button id="runButton" class="run"><span class="runIcon">▶</span><span><strong>Run Relay Now</strong><small>Check my SharePoint cases and related cases</small></span><b>→</b></button><button id="stopButton" class="stopButton hidden"><span class="stopIcon">■</span><span><strong>Stop Monitor</strong><small>Cancel the current monitor run</small></span></button></div>
-<div id="runStatus" class="message" role="status" aria-live="polite"></div>
-<section class="stats"><div><strong id="sharePointCount">0</strong><span>SharePoint</span></div><div><strong id="rpdCount">0</strong><span>RPD Watched</span></div><div><strong id="salesforceCount">0</strong><span>SF Watched</span></div><div><strong id="spinOffCount">0</strong><span>Related cases</span></div></section>
-<div class="footer"><span id="scheduleText">Manual monitoring</span><button id="serviceWorkerButton" class="serviceWorkerButton" title="Open extension details to inspect the service worker">Service Worker ↗</button></div>
-<details class="tools"><summary>Report and diagnostics</summary><div class="actions"><button id="copyReportButton">Copy Report</button><button id="exportHistoryButton">Export History</button><button id="copyDiagnosticsButton">Copy Diagnostics</button></div><pre id="report"></pre></details>
-</div>
-<dialog id="runDialogOverlay" class="dialogOverlay" aria-labelledby="runDialogTitle"><div class="runDialog"><div class="dialogHeader"><div class="dialogIcon">▶</div><div><h2 id="runDialogTitle">Run Relay</h2><p>How would you like to run this check?</p></div></div><button id="runWithReportButton" class="dialogChoice primaryChoice"><span class="choiceIcon">📋</span><span class="choiceText"><strong>Run + Send Report</strong><span>Review my assigned cases and related cases, then send all four Teams report sections.</span></span><span>→</span></button><button id="runOnlyButton" class="dialogChoice"><span class="choiceIcon">🔍</span><span class="choiceText"><strong>Run Only</strong><span>Send only Needs Attention and Stale sections when either contains cases and a report URL is configured.</span></span><span>→</span></button><button id="cancelRunButton" class="cancelButton">Cancel</button></div></dialog>
-<dialog id="stopDialogOverlay" class="dialogOverlay" aria-labelledby="stopDialogTitle"><div class="runDialog"><div class="dialogHeader"><div class="dialogIcon stopDialogIcon">■</div><div><h2 id="stopDialogTitle">Stop current monitor?</h2><p>Cancel the current check and stop further work.</p></div></div><div class="stopWarning">Completed checks stay saved. A report already submitted cannot be recalled.</div><button id="keepRunningButton" class="dialogChoice"><span class="choiceIcon">▶</span><span class="choiceText"><strong>No, Keep Running</strong><span>Continue the current check.</span></span></button><button id="confirmStopButton" class="dialogChoice dangerChoice"><span class="choiceIcon dangerIcon">■</span><span class="choiceText"><strong>Yes, Stop Run</strong><span>Stop as soon as the current operation can finish safely.</span></span></button></div></dialog>
-</body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Relay</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="popup.js" defer></script>
+</head>
+
+<body class="popup">
+  <div class="app">
+    <header>
+      <div class="brand">
+        <div class="logo">
+          <img
+            src="images/relay.png"
+            alt=""
+            width="46"
+            height="46"
+            style="object-fit:contain;border-radius:14px"
+          >
+        </div>
+
+        <div>
+          <h1>Relay</h1>
+          <p>Case monitoring dashboard</p>
+        </div>
+      </div>
+
+      <div class="headerActions">
+        <button
+          id="settingsButton"
+          title="Settings"
+          aria-label="Settings"
+        >⚙</button>
+
+        <button
+          id="themeButton"
+          title="Theme"
+          aria-label="Switch theme"
+        >☀️</button>
+      </div>
+    </header>
+
+    <section class="card status">
+      <span id="statusDot" aria-hidden="true"></span>
+
+      <div>
+        <strong id="statusText">Loading…</strong>
+        <p id="lastRun">No completed run yet</p>
+      </div>
+    </section>
+
+    <div class="monitorActions">
+      <button id="runButton" class="run">
+        <span class="runIcon">▶</span>
+
+        <span>
+          <strong>Run Relay Now</strong>
+          <small>Check my SharePoint cases and related cases</small>
+        </span>
+
+        <b>→</b>
+      </button>
+
+      <button id="stopButton" class="stopButton hidden">
+        <span class="stopIcon">■</span>
+
+        <span>
+          <strong>Stop Monitor</strong>
+          <small>Cancel the current monitor run</small>
+        </span>
+      </button>
+    </div>
+
+    <div
+      id="runStatus"
+      class="message"
+      role="status"
+      aria-live="polite"
+    ></div>
+
+    <section class="stats">
+      <div>
+        <strong id="sharePointCount">0</strong>
+        <span>SharePoint</span>
+      </div>
+
+      <div>
+        <strong id="rpdCount">0</strong>
+        <span>RPD Watched</span>
+      </div>
+
+      <div>
+        <strong id="salesforceCount">0</strong>
+        <span>SF Watched</span>
+      </div>
+
+      <div>
+        <strong id="spinOffCount">0</strong>
+        <span>Related cases</span>
+      </div>
+    </section>
+
+    <div class="footer">
+      <span id="scheduleText">Manual monitoring</span>
+
+      <button
+        id="serviceWorkerButton"
+        class="serviceWorkerButton"
+        title="Open extension details to inspect the service worker"
+      >Service Worker ↗</button>
+    </div>
+
+    <details class="tools">
+      <summary>Report and diagnostics</summary>
+
+      <div class="actions">
+        <button id="copyReportButton">Copy Report</button>
+        <button id="exportHistoryButton">Export History</button>
+        <button id="copyDiagnosticsButton">Copy Diagnostics</button>
+      </div>
+
+      <pre id="report"></pre>
+    </details>
+  </div>
+
+  <dialog
+    id="runDialogOverlay"
+    class="dialogOverlay"
+    aria-labelledby="runDialogTitle"
+  >
+    <div class="runDialog">
+      <div class="dialogHeader">
+        <div class="dialogIcon">▶</div>
+
+        <div>
+          <h2 id="runDialogTitle">Run Relay</h2>
+          <p>How would you like to run this check?</p>
+        </div>
+      </div>
+
+      <button
+        id="runWithReportButton"
+        class="dialogChoice primaryChoice"
+      >
+        <span class="choiceIcon">📋</span>
+
+        <span class="choiceText">
+          <strong>Run + Send Report</strong>
+          <span>
+            Review my assigned cases and related cases, then send all four Teams report sections.
+          </span>
+        </span>
+
+        <span>→</span>
+      </button>
+
+      <button id="runOnlyButton" class="dialogChoice">
+        <span class="choiceIcon">🔍</span>
+
+        <span class="choiceText">
+          <strong>Run Only</strong>
+          <span>
+            Send only Needs Attention and Stale sections when either contains cases and a report URL is configured.
+          </span>
+        </span>
+
+        <span>→</span>
+      </button>
+
+      <button id="cancelRunButton" class="cancelButton">
+        Cancel
+      </button>
+    </div>
+  </dialog>
+
+  <dialog
+    id="stopDialogOverlay"
+    class="dialogOverlay"
+    aria-labelledby="stopDialogTitle"
+  >
+    <div class="runDialog">
+      <div class="dialogHeader">
+        <div class="dialogIcon stopDialogIcon">■</div>
+
+        <div>
+          <h2 id="stopDialogTitle">Stop current monitor?</h2>
+          <p>Cancel the current check and stop further work.</p>
+        </div>
+      </div>
+
+      <div class="stopWarning">
+        Completed checks stay saved. A report already submitted cannot be recalled.
+      </div>
+
+      <button id="keepRunningButton" class="dialogChoice">
+        <span class="choiceIcon">▶</span>
+
+        <span class="choiceText">
+          <strong>No, Keep Running</strong>
+          <span>Continue the current check.</span>
+        </span>
+      </button>
+
+      <button
+        id="confirmStopButton"
+        class="dialogChoice dangerChoice"
+      >
+        <span class="choiceIcon dangerIcon">■</span>
+
+        <span class="choiceText">
+          <strong>Yes, Stop Run</strong>
+          <span>
+            Stop as soon as the current operation can finish safely.
+          </span>
+        </span>
+      </button>
+    </div>
+  </dialog>
+</body>
+</html>
