@@ -1,5 +1,7 @@
 (() => {
-  if (globalThis.CMReaders?.salesforce?.version === '3.1.0') return;
+  if (globalThis.CMReaders?.salesforce?.version === '3.1.7') {
+    return;
+  }
 
   const C = CM;
 
@@ -13,7 +15,16 @@
   ]);
 
   function parseArticle(article) {
-    if (!accepted.has(article.dataset.type)) return null;
+    if (!accepted.has(article.dataset.type)) {
+      return null;
+    }
+
+    // Prevent nested replies from supplying their parent's timestamp.
+    article = article.cloneNode(true);
+
+    article.querySelectorAll(
+      '.forceChatterComment,.forceChatterFeedComment'
+    ).forEach(node => node.remove());
 
     const header = article.querySelector('.cuf-feedItemHeader');
     const actor = header?.querySelector('.preamble_left');
@@ -24,15 +35,22 @@
 
     const author = C.text(copy);
 
-    const authorType = header?.querySelector(
-      'img[src*="eventcustomer"]'
-    ) ? 'client' : 'employee';
+    const isTeamMailbox =
+      C.norm(author) === C.norm('FactSet DS-Core Support');
+
+    const authorType = isTeamMailbox
+      ? 'teamMailbox'
+      : header?.querySelector('img[src*="eventcustomer"]')
+        ? 'client'
+        : 'employee';
 
     const authorId =
       actor?.querySelector('[data-id]')?.dataset.id || '';
 
     const iso = [
-      ...article.querySelectorAll('.slds-assistive-text,.assistiveText')
+      ...article.querySelectorAll(
+        '.slds-assistive-text,.assistiveText'
+      )
     ]
       .map(C.text)
       .map(value =>
@@ -45,13 +63,17 @@
     const time = article.querySelector('time[datetime]');
     const date = iso || time?.getAttribute('datetime') || '';
 
-    const preview = article.querySelector('iframe[title="Email Preview"]');
-    const emailHtml = preview?.getAttribute('srcdoc');
+    const preview = article.querySelector(
+      'iframe[title="Email Preview"]'
+    );
 
+    const emailHtml = preview?.getAttribute('srcdoc');
     let body = null;
 
     if (emailHtml) {
-      body = new DOMParser().parseFromString(emailHtml, 'text/html').body;
+      body = new DOMParser()
+        .parseFromString(emailHtml, 'text/html')
+        .body;
 
       body.querySelectorAll(
         'script,style,[style*="display:none"],[style*="display: none"]'
@@ -62,9 +84,13 @@
       '.cuf-body,.feedBodyInner,.feedBody,.forceChatterFeedBodyText'
     );
 
-    const summary = article.querySelector('.preamble_custom-summary');
+    const summary = article.querySelector(
+      '.preamble_custom-summary'
+    );
 
-    if (!body) body = expanded || summary;
+    if (!body) {
+      body = expanded || summary;
+    }
 
     const isEmail = article.dataset.type === 'EmailMessageEvent';
 
@@ -75,7 +101,9 @@
       authorId,
       authorType,
       date,
-      displayDate: C.text(header?.querySelector('.compactTimeStamp')),
+      displayDate: C.text(
+        header?.querySelector('.compactTimeStamp')
+      ),
       text: C.text(body),
       bodyAvailable: isEmail ? !!emailHtml : !!expanded,
       links: isEmail ? [] : C.explicitLinks(body)
@@ -84,12 +112,16 @@
 
   function snapshot(root = document) {
     return [
-      ...root.querySelectorAll('article.cuf-feedItem[data-id][data-type]')
+      ...root.querySelectorAll(
+        'article.cuf-feedItem[data-id][data-type]'
+      )
     ].map(parseArticle).filter(Boolean);
   }
 
   function relations(root = document) {
-    return C.links(root.querySelector('.cCaseRpdRelatedList'));
+    return C.links(
+      root.querySelector('.cCaseRpdRelatedList')
+    );
   }
 
   function scope(feed) {
@@ -98,116 +130,254 @@
     ) || document;
   }
 
-  async function read(expected) {
-    if (C.target(location.href)?.key !== expected?.key) {
-      throw new Error('Salesforce URL does not match the queued case.');
-    }
+  function findFeed(expected) {
+    const prefix = 'qe-subject-id-';
 
-    const feedTab = [
-      ...document.querySelectorAll('[role="tab"]')
+    return [
+      ...document.querySelectorAll(
+        '.cuf-feed[data-feed-type="Record"]'
+      )
     ].find(element =>
-      C.visible(element) && C.text(element) === 'Feed'
+      C.visible(element) &&
+      [...element.classList].some(name =>
+        name.startsWith(prefix) &&
+        name.slice(prefix.length, prefix.length + 15) ===
+          expected.id.slice(0, 15)
+      )
     );
+  }
 
-    if (feedTab && feedTab.getAttribute('aria-selected') !== 'true') {
-      feedTab.click();
-      await C.sleep(500);
+  function feedScroller(feed) {
+  const visited = new Set();
+  let waitingContainer = null;
+
+    for (let node = feed; node && !visited.has(node);) {
+      visited.add(node);
+
+      if (
+        node.nodeType === 1 &&
+        C.visible(node) &&
+        node.clientHeight > 0
+      ) {
+        const style = getComputedStyle(node);
+
+        const scrollable =
+          /(auto|scroll|overlay)/.test(style.overflowY) ||
+          node.dataset?.isScrollable === 'true';
+
+        if (scrollable) {
+          if (node.scrollHeight > node.clientHeight + 5) {
+            return node;
+          }
+
+          waitingContainer ||= node;
+        }
+      }
+
+      node =
+        node.assignedSlot ||
+        node.parentElement ||
+        node.getRootNode?.()?.host ||
+        null;
     }
 
-    let feed = await C.waitFor(
-      () => [
-        ...document.querySelectorAll('.cuf-feed[data-feed-type="Record"]')
-      ].find(element =>
-        [...element.classList].some(className =>
-          className.startsWith('qe-subject-id-') &&
-          className.slice(14, 29) === expected.id.slice(0, 15)
-        )
-      ),
-      25000
-    );
+    if (waitingContainer) return waitingContainer;
 
+    const page = document.scrollingElement;
+
+    if (
+      page &&
+      page.clientHeight > 0 &&
+      page.scrollHeight > page.clientHeight + 5
+    ) {
+      return page;
+    }
+
+    throw new Error(
+      'Salesforce feed loaded, but its scrolling column could not be identified.'
+    );
+  }
+
+  async function read(expected) {
+    const label = C.caseNumber(expected) || 'case';
+
+    const progress = async text => {
+      await C.cancelled();
+
+      if (C.target(location.href)?.key !== expected?.key) {
+        throw new Error(
+          'Salesforce navigated away from the queued case.'
+        );
+      }
+
+      await chrome.storage.local.set({
+        monitorProgress: `Salesforce ${label}: ${text}`
+      });
+    };
+
+    const waitFeed = async () => {
+      const started = Date.now();
+      let clicked = false;
+
+      while (Date.now() - started < 120000) {
+        const seconds = Math.floor(
+          (Date.now() - started) / 1000
+        );
+
+        await progress(
+          `waiting for the visible case feed (${seconds}s / 120s)`
+        );
+
+        const feed = findFeed(expected);
+
+        if (feed) {
+          return feed;
+        }
+
+        const tabs = [
+          ...document.querySelectorAll('[role="tab"]')
+        ].filter(node =>
+          C.visible(node) &&
+          C.text(node) === 'Feed'
+        );
+
+        if (
+          !clicked &&
+          tabs.length === 1 &&
+          tabs[0].getAttribute('aria-selected') !== 'true'
+        ) {
+          clicked = true;
+          tabs[0].click();
+        }
+
+        await C.sleep(1000);
+      }
+
+      throw new Error(
+        'No visible feed matched this Salesforce case after 120 seconds. ' +
+        'The feed layout or case identity needs inspection.'
+      );
+    };
+
+    let feed = await waitFeed();
     let root = scope(feed);
 
     const warnings = [];
     const history = new Map();
     const seen = new WeakSet();
 
+    let unknownReplies = false;
+
     const allUpdates = [
       ...root.querySelectorAll('[role="tab"]')
-    ].find(element =>
-      C.visible(element) && C.text(element) === 'All Updates'
+    ].filter(node =>
+      C.visible(node) &&
+      C.text(node) === 'All Updates'
     );
 
     if (
-      allUpdates &&
-      allUpdates.getAttribute('aria-selected') !== 'true'
+      allUpdates.length === 1 &&
+      allUpdates[0].getAttribute('aria-selected') !== 'true'
     ) {
-      allUpdates.click();
+      await progress('opening All Updates');
+
+      allUpdates[0].click();
       await C.sleep(1500);
 
-      feed = await C.waitFor(
-        () => [
-          ...document.querySelectorAll('.cuf-feed[data-feed-type="Record"]')
-        ].find(element =>
-          [...element.classList].some(className =>
-            className.startsWith('qe-subject-id-') &&
-            className.slice(14, 29) === expected.id.slice(0, 15)
-          )
-        ),
-        25000
-      );
-
+      feed = await waitFeed();
       root = scope(feed);
     }
 
     let previous = '';
-    let stable = 0;
+    let stableSince = 0;
     let ended = false;
 
-    const scroll = C.scroller(feed);
-    const original = scroll.scrollTop;
-    scroll.scrollTop = 0;
+    const positions = new Map();
+    const started = Date.now();
+
+    let rounds = 0;
 
     try {
-      for (let round = 0; round < 160; round++) {
-        await C.cancelled();
+      while (
+        Date.now() - started < 180000 &&
+        rounds++ < 240
+      ) {
+        await progress(
+          `reading and scrolling — ${history.size} messages collected`
+        );
 
-        for (const article of feed.querySelectorAll(
-          'article.cuf-feedItem[data-type]'
-        )) {
-          if (!accepted.has(article.dataset.type)) continue;
+        const current = findFeed(expected);
 
-          const open = [
-            ...article.querySelectorAll('a,button')
-          ].find(element =>
-            C.visible(element) &&
-            C.text(element) === 'Click to expand post'
+        if (!current) {
+          stableSince = 0;
+          await C.sleep(750);
+          continue;
+        }
+
+        feed = current;
+        root = scope(feed);
+
+        let scroll = feedScroller(feed);
+
+        if (!positions.has(scroll)) {
+          positions.set(scroll, scroll.scrollTop);
+
+          scroll.scrollTop = 0;
+
+          scroll.dispatchEvent(
+            new Event('scroll', { bubbles: true })
           );
 
-          if (open) {
-            open.click();
-            await C.sleep(200);
-          }
+          await C.sleep(750);
+          stableSince = 0;
         }
 
-        for (const button of feed.querySelectorAll('a,button')) {
-          if (
-            C.visible(button) &&
-            !seen.has(button) &&
-            /^(?:Show more|View more|Load more|View all comments|Show all comments|More comments)$/i
-              .test(C.text(button))
-          ) {
-            seen.add(button);
-            button.click();
-            await C.sleep(250);
-          }
-        }
+        let expanded = false;
 
-        await C.sleep(400);
+        const controls = [
+          ...feed.querySelectorAll('a,button')
+        ].filter(node =>
+          C.visible(node) &&
+          !node.disabled &&
+          !seen.has(node) &&
+          /^(?:Click to expand post|Show more|View more|Load more|View all comments|Show all comments|More comments)$/i
+            .test(C.text(node))
+        );
+
+        for (const button of controls.slice(0, 12)) {
+          await C.cancelled();
+
+          if (!button.isConnected) {
+            continue;
+          }
+
+          seen.add(button);
+          button.click();
+          expanded = true;
+
+          await C.sleep(150);
+        }
 
         for (const message of snapshot(feed)) {
           history.set(message.id, message);
         }
+
+        unknownReplies ||= !!feed.querySelector(
+          '.forceChatterComment,.forceChatterFeedComment'
+        );
+
+        // Recheck because Salesforce may replace its scrolling container.
+        scroll = feedScroller(feed);
+
+        if (!positions.has(scroll)) {
+          positions.set(scroll, scroll.scrollTop);
+        }
+
+        const busy =
+          feed.matches('[aria-busy="true"]') ||
+          [...feed.querySelectorAll(
+            '[aria-busy="true"],[role="progressbar"],.slds-spinner'
+          )].some(C.visible);
 
         const signature =
           JSON.stringify(
@@ -218,36 +388,92 @@
               message.bodyAvailable
             ])
           ) +
-          scroll.scrollHeight +
-          ':' +
-          scroll.scrollTop;
+          `/${scroll.scrollHeight}/${scroll.scrollTop}`;
 
         const bottom =
-          scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 5;
+          scroll.scrollTop + scroll.clientHeight >=
+          scroll.scrollHeight - 5;
 
-        stable = bottom && signature === previous ? stable + 1 : 0;
+        if (
+          bottom &&
+          !busy &&
+          !expanded &&
+          history.size &&
+          signature === previous
+        ) {
+          if (!stableSince) {
+            stableSince = Date.now();
+          }
 
-        if (stable >= 5) {
-          ended = true;
-          break;
+          if (Date.now() - stableSince >= 8000) {
+            ended = true;
+            break;
+          }
+        } else {
+          stableSince = 0;
         }
 
         previous = signature;
 
-        const trigger = feed.parentElement?.querySelector('.loadMoreTrigger');
+        const trigger = feed
+        .closest('.forceChatterFeed')
+        ?.querySelector('.loadMoreTrigger');
 
-        if (bottom && trigger) {
-          trigger.scrollIntoView({ block: 'end' });
-        } else {
-          scroll.scrollTop += Math.max(200, scroll.clientHeight * .8);
+        const before = scroll.scrollTop;
+
+        scroll.scrollTop += Math.max(
+          200,
+          scroll.clientHeight * 0.8
+        );
+
+        if (
+          bottom &&
+          trigger &&
+          C.visible(trigger)
+        ) {
+          trigger.scrollIntoView({
+            block: 'end',
+            behavior: 'instant'
+          });
         }
 
-        scroll.dispatchEvent(new Event('scroll', { bubbles: true }));
-        await C.sleep(400);
+        scroll.dispatchEvent(
+          new Event('scroll', { bubbles: true })
+        );
+
+        await progress(
+          `${busy ? 'waiting for more messages' : 'scrolling feed'} — ` +
+          `${history.size} messages; position ` +
+          `${Math.round(scroll.scrollTop)} / ` +
+          `${Math.max(
+            0,
+            Math.round(scroll.scrollHeight - scroll.clientHeight)
+          )}`
+        );
+
+        if (
+          !bottom &&
+          scroll.scrollTop === before &&
+          !busy
+        ) {
+          throw new Error(
+            'The Salesforce feed scrolling element did not move.'
+          );
+        }
+
+        await C.sleep(750);
       }
     } finally {
-      scroll.scrollTop = original;
+      for (const [node, top] of positions) {
+        if (node.isConnected) {
+          node.scrollTop = top;
+        }
+      }
     }
+
+    await progress(
+      'checking linked RPDs and preparing the case result'
+    );
 
     const messages = [...history.values()];
     const latest = C.latest(messages);
@@ -268,13 +494,6 @@
       );
     }
 
-    const comments = feed.querySelectorAll(
-      '.forceChatterComment,.forceChatterFeedComment'
-    );
-
-    // Unknown nested replies must not silently produce a handled result.
-    const unknownReplies = comments.length > 0;
-
     if (unknownReplies) {
       warnings.push(
         'Nested feed replies found; this layout needs verification before choosing the latest message.'
@@ -283,7 +502,10 @@
 
     const card = root.querySelector('.cCaseRpdRelatedList');
     let related = relations(root);
-    const cardContainer = card?.closest('flexipage-component2');
+
+    const cardContainer = card?.closest(
+      'flexipage-component2'
+    );
 
     const count = Number(
       C.text(
@@ -303,7 +525,8 @@
         const dialog = [
           ...document.querySelectorAll('[role="dialog"]')
         ].find(element =>
-          C.visible(element) && /Case RPDs/.test(C.text(element))
+          C.visible(element) &&
+          /Case RPDs/.test(C.text(element))
         );
 
         if (dialog) {
@@ -342,6 +565,7 @@
       status: field('Status'),
       messages,
       latest,
+
       links: [
         ...new Map(
           [
@@ -352,15 +576,22 @@
             .map(item => [item.key, item])
         ).values()
       ],
-      error: unknownReplies
-        ? 'Nested Salesforce replies could not be verified.'
-        : !latest
-          ? 'Could not verify the latest Salesforce author and UTC timestamp.'
-          : '',
+
+      error: !ended
+        ? 'Salesforce feed did not reach a stable end; latest message was not verified.'
+        : unknownReplies
+          ? 'Nested Salesforce replies could not be verified.'
+          : !latest
+            ? 'Could not verify the latest Salesforce author and UTC timestamp.'
+            : '',
+
       warnings,
+
       historyCoverage:
         'Loaded case feed after scrolling and expanding messages; other activity views are not assumed complete.',
+
       capturedAt: new Date().toISOString(),
+
       diagnostics: {
         feedCase: expected.id,
         messageCount: messages.length,
@@ -378,7 +609,7 @@
   globalThis.CMReaders ||= {};
 
   globalThis.CMReaders.salesforce = {
-    version: '3.1.0',
+    version: '3.1.7',
     read,
     snapshot,
     relations

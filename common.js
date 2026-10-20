@@ -239,6 +239,13 @@
   function identity(message, settings) {
     const author = norm(message?.author);
 
+    if (
+      message?.kind === 'EmailMessageEvent' &&
+      author === norm('FactSet DS-Core Support')
+    ) {
+      return 'TEAM';
+    }
+
     if (message?.authorType === 'client') return 'CLIENT';
 
     if (

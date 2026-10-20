@@ -7,7 +7,11 @@
     ...document.querySelectorAll(
       '#list-content-id [role="row"][data-automationid^="row-"]'
     )
-  ];
+  ].filter(row =>
+    /^row-\d+$/.test(
+      row.getAttribute('data-automationid') || ''
+    )
+  );
 
   function field(row, name) {
     return row.querySelector(`[data-automationid="field-${name}"]`);

@@ -1,12 +1,14 @@
 importScripts('common.js');
 
 const C = CM;
-let busy = false, starting = false, deliveryController = null;
+let busy = false;
+let starting = false;
+let deliveryController = null;
 
 const defaults = {
-  rpdName: "Matthew Cuaresma",
-  salesforceAlias: "matth",
-  powerAutomateUrl: "",
+  rpdName: 'Matthew Cuaresma',
+  salesforceAlias: 'matth',
+  powerAutomateUrl: '',
   myTeam: [
     { name: 'Yilin Zhu', ownerAlias: 'yilin' },
     { name: 'Michael Roxas', ownerAlias: 'micha' },
@@ -141,7 +143,6 @@ async function ready(tabId) {
 
   while (Date.now() < end) {
     await C.cancelled();
-
     const tab = await chrome.tabs.get(tabId);
 
     if (tab.status === 'complete') return;
@@ -152,7 +153,6 @@ async function ready(tabId) {
   throw new Error('Case page load timed out.');
 }
 
-// Returns the exact fresh document that the reader may inspect.
 async function reloadAndWait(tabId, site, refresh = true) {
   await C.cancelled();
 
@@ -178,15 +178,13 @@ async function reloadAndWait(tabId, site, refresh = true) {
     oldDocumentId = before?.documentId;
 
     if (!oldDocumentId) {
-      throw new Error(
-        'Cannot identify the page before refresh; reading was skipped.'
-      );
+      throw new Error('Cannot verify the page before refresh.');
     }
   }
 
   await chrome.storage.local.set({
     monitorProgress:
-      `${refresh ? 'Refreshing' : 'Loading'} ${site} — waiting for page content…`
+      `${refresh ? 'Refreshing' : 'Loading'} ${site}…`
   });
 
   if (refresh) {
@@ -195,112 +193,125 @@ async function reloadAndWait(tabId, site, refresh = true) {
     });
   }
 
-  const deadline = Date.now() + 60000;
+  const started = Date.now();
 
   let stableDocument = '';
-  let readySince = 0;
+  let signature = '';
+  let since = 0;
+  let reason = 'waiting for page navigation';
 
-  while (Date.now() < deadline) {
+  while (Date.now() - started < 180000) {
     await C.cancelled();
 
     const current = await chrome.tabs.get(tabId);
-
-    if (current.status !== 'complete') {
-      readySince = 0;
-      await C.sleep(400);
-      continue;
-    }
-
     let probe;
 
-    try {
-      [probe] = await chrome.scripting.executeScript({
-        target: { tabId },
-        injectImmediately: true,
+    if (current.status === 'complete') {
+      try {
+        [probe] = await chrome.scripting.executeScript({
+          target: { tabId },
+          injectImmediately: true,
 
-        func: site => {
-          const visible = element => {
-            const style = getComputedStyle(element);
-
-            return (
-              element.getClientRects().length > 0 &&
-              style.display !== 'none' &&
-              style.visibility !== 'hidden'
-            );
-          };
-
-          let root = null;
-
-          if (
-            site === 'SharePoint' &&
-            location.hostname === 'factset.sharepoint.com'
-          ) {
-            root = document.querySelector('#list-content-id');
+          func: site => {
+            const hosts = {
+              SharePoint: 'factset.sharepoint.com',
+              Salesforce: 'factset.lightning.force.com',
+              RPD: 'rpd.factset.com'
+            };
 
             if (
-              !root?.querySelector(
-                '[role="row"][data-automationid^="row-"] [data-automationid="field-AMAssignee"]'
-              )
+              location.hostname !== hosts[site] ||
+              document.readyState !== 'complete'
             ) {
-              root = null;
+              return {
+                ready: false,
+                reason: 'waiting for navigation or sign-in'
+              };
             }
-          } else if (
-            site === 'RPD' &&
-            location.hostname === 'rpd.factset.com'
-          ) {
-            root = document.querySelector(
-              '.reply [id^="msgContent_"]'
-            )
-              ? document.querySelector('#summaryContent') ||
-                document.body
-              : null;
-          } else if (
-            site === 'Salesforce' &&
-            location.hostname === 'factset.lightning.force.com'
-          ) {
-            const anchor = [
-              ...document.querySelectorAll(
-                '.cuf-feed[data-feed-type="Record"], [role="tab"]'
-              )
-            ].find(element =>
-              visible(element) &&
-              (
-                element.matches('.cuf-feed') ||
-                element.textContent.trim() === 'Feed'
-              )
-            );
 
-            root = anchor?.closest(
-              '.oneContent,.oneRecordHomeFlexipage,.recordHomeFlexipage2'
-            ) || anchor;
-          }
+            if (site === 'Salesforce') {
+              // Salesforce's reader handles feed loading and activation.
+              return {
+                ready: !!document.body,
+                signature: 'salesforce'
+              };
+            }
 
-          const busy = root && [
-            root,
-            ...root.querySelectorAll(
-              '[aria-busy="true"], [role="progressbar"], .slds-spinner'
-            )
-          ].some(element =>
-            visible(element) &&
-            element.matches(
-              '[aria-busy="true"], [role="progressbar"], .slds-spinner'
-            )
-          );
+            if (site === 'RPD') {
+              return {
+                ready: !!document.querySelector(
+                  '.reply [id^="msgContent_"]'
+                ),
+                signature: 'rpd',
+                reason: 'waiting for the RPD thread'
+              };
+            }
 
-          return {
-            ready:
-              document.readyState === 'complete' &&
-              !!root &&
-              !busy
-          };
-        },
+            const visible = node =>
+              !!node?.getClientRects().length &&
+              getComputedStyle(node).visibility !== 'hidden';
 
-        args: [site]
-      });
-    } catch {
-      readySince = 0;
-      await C.sleep(400);
-      continue;
+            const list = document.querySelector('#list-content-id');
+
+            const rows = list
+              ? [...list.querySelectorAll(
+                  '[role="row"][data-automationid^="row-"]'
+                )].filter(row => {
+                  const isDataRow = /^row-\d+$/.test(
+                    row.getAttribute('data-automationid') || ''
+                  );
+
+                  // Check the rendered cells as well as the row wrapper.
+                  const rendered =
+                    visible(row) ||
+                    [...row.querySelectorAll(
+                      '[data-automationid^="field-"]'
+                    )].some(cell =>
+                      visible(cell) ||
+                      [...cell.querySelectorAll('*')].some(visible)
+                    );
+
+                  return isDataRow && rendered;
+                })
+              : [];
+
+            const ready =
+              !!rows.length &&
+              rows.every(row =>
+                row.querySelector(
+                  '[data-automationid="field-AMAssignee"]'
+                ) &&
+                row.querySelector(
+                  '[data-automationid="field-LinkTitle"]'
+                )
+              ) &&
+              !list.matches('[aria-busy="true"]') &&
+              ![...list.querySelectorAll(
+                '[aria-busy="true"],[role="progressbar"],.ms-Spinner'
+              )].some(visible);
+
+            return {
+              ready,
+              signature: rows.map(row =>
+                row.getAttribute('data-automationid') +
+                ':' +
+                row.textContent.trim()
+              ).join('|'),
+              reason: ready
+                ? 'waiting for rows to settle'
+                : 'waiting for assignment rows'
+            };
+          },
+
+          args: [site]
+        });
+      } catch (error) {
+        reason = `waiting for page access: ${error.message}`;
+      }
+    }
+
+    if (probe?.result?.reason) {
+      reason = probe.result.reason;
     }
 
     if (
@@ -308,41 +319,43 @@ async function reloadAndWait(tabId, site, refresh = true) {
       probe.documentId === oldDocumentId ||
       !probe.result?.ready
     ) {
-      readySince = 0;
+      since = 0;
     } else {
-      if (stableDocument !== probe.documentId) {
+      const next = probe.result.signature || '';
+
+      if (
+        !since ||
+        stableDocument !== probe.documentId ||
+        signature !== next
+      ) {
         stableDocument = probe.documentId;
-        readySince = 0;
+        signature = next;
+        since = Date.now();
       }
 
-      if (!readySince) {
-        readySince = Date.now();
-      }
+      const settleTime = site === 'SharePoint' ? 6000 : 2000;
 
-      if (Date.now() - readySince >= 2000) {
-        await C.cancelled();
-
+      if (Date.now() - since >= settleTime) {
         await chrome.storage.local.set({
           monitorProgress:
-            `${refresh ? 'Refresh' : 'Page load'} verified — reading ${site}…`
-        });
-
-        console.info('[Relay page verified]', {
-          site,
-          tabId,
-          refreshed: refresh,
-          documentId: stableDocument
+            `${site} refreshed — starting its reader…`
         });
 
         return stableDocument;
       }
     }
 
-    await C.sleep(400);
+    await chrome.storage.local.set({
+      monitorProgress:
+        `${site}: ${reason} ` +
+        `(${Math.floor((Date.now() - started) / 1000)}s / 180s)`
+    });
+
+    await C.sleep(750);
   }
 
   throw new Error(
-    `${site} ${refresh ? 'refresh' : 'load'} was not verified. Reading was skipped; check sign-in, access, and page loading.`
+    `${site} load timed out: ${reason}. Reading was skipped.`
   );
 }
 
@@ -573,6 +586,20 @@ async function detail(task, job) {
         };
       } catch (error) {
         last = error;
+        await C.cancelled();
+
+        await chrome.storage.local.set({
+          monitorProgress:
+            `${caseLabel(task, job)} — attempt ${attempt + 1}/3 failed: ` +
+            error.message
+        });
+
+        console.warn(
+          '[Relay case read failed]',
+          task.key,
+          attempt + 1,
+          error.message
+        );
 
         if (attempt < 2) {
           await C.sleep(1200);
@@ -718,13 +745,10 @@ function report(job, items) {
     groups[group].push(item);
   }
 
-  // Historical assignments are not counted as pages read this run.
   for (const row of job.removedAssignments || []) {
     if (
       !row.primary ||
-      groups.resolved.some(
-        item => item.key === row.primary.key
-      )
+      groups.resolved.some(item => item.key === row.primary.key)
     ) {
       continue;
     }
@@ -736,7 +760,6 @@ function report(job, items) {
       removedFromSharePoint: true,
       detectedAt: job.sharepointScannedAt,
       latest: null,
-
       attention: {
         group: 'resolved',
         finished: true,
@@ -800,7 +823,6 @@ function report(job, items) {
     type: 'AdaptiveCard',
     version: '1.2',
     msteams: { width: 'Full' },
-
     body: [
       text('📋 Relay Case Review', true),
       text(`Checked: ${checked} (UTC+8)`),
@@ -815,11 +837,7 @@ function report(job, items) {
       ? '⚠ Needs manual checking'
       : headings[group].replaceAll('**', '');
 
-    lines.push(
-      '',
-      `${title} (${groups[group].length})`,
-      ''
-    );
+    lines.push('', `${title} (${groups[group].length})`, '');
 
     if (!groups[group].length) {
       lines.push('None.');
@@ -870,9 +888,7 @@ function report(job, items) {
 
     for (const row of rows) {
       const bytes = new TextEncoder().encode(
-        JSON.stringify(
-          card(title, [header, ...part, row])
-        )
+        JSON.stringify(card(title, [header, ...part, row]))
       ).length;
 
       if (
@@ -901,11 +917,7 @@ function report(job, items) {
       ...warnings.map(warning => '- ' + safe(warning))
     );
 
-    for (
-      let index = 0;
-      index < warnings.length;
-      index += 10
-    ) {
+    for (let index = 0; index < warnings.length; index += 10) {
       cards.push(card(
         '⚠ Read warnings',
         warnings
@@ -932,7 +944,6 @@ function report(job, items) {
       : escape(caseLabel(item, job));
   };
 
-  // HTML breaks create visible spacing; literal newlines aid readability.
   const table = (headers, rows) =>
     '<table style="border-collapse:collapse;width:100%">' +
     '<thead><tr>' +
@@ -950,41 +961,20 @@ function report(job, items) {
     '</tbody></table><br><br>\n\n';
 
   const summaryRows = [
-    [
-      'Assigned to',
-      escape(job.settings?.rpdName || '')
-    ],
-    [
-      'Checked',
-      escape(checked) + ' (UTC+8)'
-    ],
-    [
-      'SharePoint assignments',
-      String(job.sharepoint.length)
-    ],
-    [
-      'Case pages checked',
-      String(items.length)
-    ],
-    [
-      'Current RPDs resolved',
-      String(finished)
-    ],
+    ['Assigned to', escape(job.settings?.rpdName || '')],
+    ['Checked', escape(checked) + ' (UTC+8)'],
+    ['SharePoint assignments', String(job.sharepoint.length)],
+    ['Case pages checked', String(items.length)],
+    ['Current RPDs resolved', String(finished)],
     [
       'Removed from SharePoint since previous scan',
       String((job.removedAssignments || []).length)
     ],
     [
       'SharePoint comparison',
-      escape(
-        job.sharepointComparison ||
-        'Baseline not available'
-      )
+      escape(job.sharepointComparison || 'Baseline not available')
     ],
-    [
-      'Needs manual checking',
-      String(groups.unclassified.length)
-    ]
+    ['Needs manual checking', String(groups.unclassified.length)]
   ];
 
   const htmlHeader =
@@ -1019,7 +1009,6 @@ function report(job, items) {
           : assigned
             ? 'Your SharePoint assignment'
             : 'Related case',
-
         from.length
           ? 'Related to: ' + from.map(htmlLink).join('<br>')
           : ''
@@ -1033,14 +1022,8 @@ function report(job, items) {
 
       return [
         htmlLink(item),
-
         escape(author) +
-          (
-            verified
-              ? ''
-              : '<br><em>Latest not verified</em>'
-          ),
-
+          (verified ? '' : '<br><em>Latest not verified</em>'),
         escape(date(item.latest?.date)),
         escape(reason(item)),
         relationship
@@ -1099,19 +1082,13 @@ function report(job, items) {
         ? [
             htmlLink(match),
             escape(
-              warning.slice(
-                caseLabel(match, job).length + 2
-              )
+              warning.slice(caseLabel(match, job).length + 2)
             )
           ]
-        : [
-            'SharePoint / monitor',
-            escape(warning)
-          ];
+        : ['SharePoint / monitor', escape(warning)];
 
       const bytes = new TextEncoder().encode(
-        htmlHeader +
-        renderWarnings([...warningRows, row])
+        htmlHeader + renderWarnings([...warningRows, row])
       ).length;
 
       if (warningRows.length && bytes > 20000) {
@@ -1189,11 +1166,9 @@ async function send(
   try {
     const response = await fetch(url.href, {
       method: 'POST',
-
       headers: {
         'Content-Type': 'application/json'
       },
-
       body: JSON.stringify({
         source: 'Monitor Summary',
         caseId: '',
@@ -1226,7 +1201,6 @@ async function send(
               }]
             }]
       }),
-
       signal: deliveryController.signal
     });
 
@@ -1250,10 +1224,7 @@ async function finish(job) {
     const item = records[`cmCase:${task.key}`];
 
     const current = item?.runId === job.id
-      ? {
-          ...item,
-          parents: task.parents
-        }
+      ? { ...item, parents: task.parents }
       : {
           ...task,
           error: 'Case was not read during this run.'
@@ -1276,48 +1247,34 @@ async function finish(job) {
   } = report(job, items);
 
   const hasAlerts =
-    groups.needsAttention.length +
-    groups.stale.length > 0;
+    groups.needsAttention.length + groups.stale.length > 0;
 
   const result = {
     success: true,
-
     partial:
       groups.unclassified.length > 0 ||
       job.warnings.length > 0,
-
     unclassifiedCount: groups.unclassified.length,
-
     removedFromSharePointCount:
       (job.removedAssignments || []).length,
-
     resolvedCount: groups.resolved.length,
-
     finishedCount: items.filter(
       item => item.attention.finished
     ).length,
-
     tabGroups: 0,
-
     sharePointCases: job.sharepoint.length,
-
     rpdWatched: items.filter(
       item => item.source === 'RPD'
     ).length,
-
     salesforceWatched: items.filter(
       item => item.source === 'Salesforce'
     ).length,
-
     spinOffRpds: job.queue.filter(task =>
-      task.parents.some(
-        parent => !parent.startsWith('SP:')
-      ) ||
+      task.parents.some(parent => !parent.startsWith('SP:')) ||
       !job.sharepoint.some(
         row => row.primary?.key === task.key
       )
     ).length,
-
     summarySent: false,
     review: groups,
     warnings: job.warnings || [],
@@ -1378,15 +1335,12 @@ async function finish(job) {
     lastMonitorResult: result,
     latestCaseReview: groups,
     currentWatchList: job.sharepoint,
-
     currentRpdWatchList: job.queue.filter(
       task => task.source === 'RPD'
     ),
-
     currentSalesforceWatchList: job.queue.filter(
       task => task.source === 'Salesforce'
     ),
-
     currentSharePointSpinOffs: job.queue.filter(task =>
       !job.sharepoint.some(
         row => row.primary?.key === task.key
@@ -1394,7 +1348,6 @@ async function finish(job) {
     )
   });
 
-  // Update the baseline only after a completed run.
   if (
     job.saveAssignmentBaseline &&
     job.sharepointScope
@@ -1404,7 +1357,6 @@ async function finish(job) {
         scope: job.sharepointScope,
         identity: C.norm(job.settings.rpdName),
         checkedAt: job.sharepointScannedAt,
-
         cases: job.sharepoint.map(row => ({
           primary: row.primary,
           title: row.title
@@ -1457,19 +1409,14 @@ async function pump() {
       job.sharepointScannedAt = new Date().toISOString();
       job.removedAssignments = [];
 
-      const {
-        relayAssignmentBaseline
-      } = await chrome.storage.local.get(
-        'relayAssignmentBaseline'
-      );
+      const { relayAssignmentBaseline } =
+        await chrome.storage.local.get('relayAssignmentBaseline');
 
       const comparable =
         relayAssignmentBaseline &&
         relayAssignmentBaseline.scope === job.sharepointScope &&
-        relayAssignmentBaseline.identity ===
-          C.norm(job.settings.rpdName);
+        relayAssignmentBaseline.identity === C.norm(job.settings.rpdName);
 
-      // Unreadable links could disguise existing assignments.
       const completeKeys = data.cases.every(
         row => row.primary?.key
       );
@@ -1607,9 +1554,7 @@ async function pump() {
   } catch (error) {
     if (job) {
       const stopped = (
-        await chrome.storage.local.get(
-          'monitorStopRequested'
-        )
+        await chrome.storage.local.get('monitorStopRequested')
       ).monitorStopRequested;
 
       job.status = stopped ? 'stopped' : 'failed';
